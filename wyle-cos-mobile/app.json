@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "Wyle",
+    "slug": "wyle-cos-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./src/assets/images/icon.png",
+    "scheme": "wyle",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./src/assets/images/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.wyle.cos",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Wyle uses your microphone for voice commands.",
+        "NSCameraUsageDescription": "Wyle uses your camera to scan documents.",
+        "NSPhotoLibraryUsageDescription": "Wyle accesses your photos for document uploads."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/images/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "package": "com.wyle.cos",
+      "permissions": [
+        "RECORD_AUDIO",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        { "cameraPermission": "Wyle uses camera to scan your documents." }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
