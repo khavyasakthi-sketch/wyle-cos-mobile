@@ -29,7 +29,7 @@ export interface UserInsights {
   totalMoneySavedAED: number;
 }
 
-// ─── Obligation ───────────────────────────────────────────────────────────────
+// ─── Obligation (backend model — do not modify) ────────────────────────────────
 export type ObligationType =
   | 'visa'
   | 'emirates_id'
@@ -67,6 +67,48 @@ export interface Obligation {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// ─── UIObligation (lightweight — used by UI, mock data, and brain dump) ────────
+// This is what the store holds, ObligationsScreen renders, and BrainDump creates.
+// When the backend is ready, map Obligation → UIObligation on API response.
+export interface UIObligation {
+  _id: string;
+  emoji: string;
+  title: string;
+  type: string;                       // relaxed — brain dump can return any type string
+  daysUntil: number;
+  risk: 'high' | 'medium' | 'low';
+  amount: number | null;
+  status: 'active' | 'completed';
+  executionPath: string;
+  notes: string | null;
+}
+
+// Helper — converts backend Obligation to UIObligation when API is ready
+export function toUIObligation(o: Obligation): UIObligation {
+  return {
+    _id:           o._id,
+    emoji:         emojiForType(o.type),
+    title:         o.title,
+    type:          o.type,
+    daysUntil:     o.daysUntil ?? 0,
+    risk:          o.riskLevel,
+    amount:        o.amount ?? null,
+    status:        o.status === 'completed' ? 'completed' : 'active',
+    executionPath: o.executionPath ?? '',
+    notes:         o.notes ?? null,
+  };
+}
+
+function emojiForType(type: ObligationType): string {
+  const map: Record<ObligationType, string> = {
+    visa: '🛂', emirates_id: '🪪', car_registration: '🚗',
+    insurance: '🛡️', school_fee: '🎓', mortgage_emi: '🏠',
+    subscription: '📱', medical: '🏥', document: '📄',
+    bill: '💡', custom: '📦',
+  };
+  return map[type] ?? '📦';
 }
 
 // ─── Food ─────────────────────────────────────────────────────────────────────
@@ -143,6 +185,7 @@ export interface InsightsData {
 export type RootStackParamList = {
   Onboarding: undefined;
   Main: undefined;
+  brainDump: undefined;
 };
 
 export type MainTabParamList = {

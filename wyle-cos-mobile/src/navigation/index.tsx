@@ -1,12 +1,11 @@
 import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Text, View } from 'react-native';
+import { Text } from 'react-native';
 import { Colors, Typography } from '../theme';
 import { useAppStore } from '../store';
 
-// ─── Screens (imported lazily to keep nav file clean) ─────────────────────────
+// ─── Screens ──────────────────────────────────────────────────────────────────
 import HomeScreen from '../screens/Home/HomeScreen';
 import ObligationsScreen from '../screens/Obligations/ObligationsScreen';
 import FoodScreen from '../screens/Food/FoodScreen';
@@ -16,6 +15,7 @@ import WelcomeScreen from '../screens/Onboarding/WelcomeScreen';
 import PreferencesScreen from '../screens/Onboarding/PreferencesScreen';
 import ObligationScanScreen from '../screens/Onboarding/ObligationScanScreen';
 import ReadyScreen from '../screens/Onboarding/ReadyScreen';
+import BrainDumpScreen from '../screens/BrainDump/BrainDumpScreen';
 
 const RootStack = createStackNavigator();
 const OnboardingStack = createStackNavigator();
@@ -72,22 +72,32 @@ function MainTabs() {
   );
 }
 
-// ─── Root navigator ───────────────────────────────────────────────────────────
+// ─── Main app screens (tabs + modal screens like BrainDump) ───────────────────
+function MainNavigator() {
+  return (
+    <RootStack.Navigator screenOptions={{ headerShown: false }}>
+      <RootStack.Screen name="Main" component={MainTabs} />
+      <RootStack.Screen
+        name="brainDump"
+        component={BrainDumpScreen}
+        options={{ presentation: 'modal' }}   // slides up from bottom — feels natural
+      />
+    </RootStack.Navigator>
+  );
+}
+
+// ─── Root navigator — NO NavigationContainer (Expo Router provides it) ────────
 export default function AppNavigator() {
   const { user, isAuthenticated } = useAppStore();
-  const showOnboarding = isAuthenticated && !user?.onboardingComplete;
+  const showOnboarding = !isAuthenticated || !user?.onboardingComplete;
 
   return (
-    <NavigationContainer>
-      <RootStack.Navigator screenOptions={{ headerShown: false }}>
-        {!isAuthenticated ? (
-          <RootStack.Screen name="Onboarding" component={OnboardingNavigator} />
-        ) : showOnboarding ? (
-          <RootStack.Screen name="OnboardingFlow" component={OnboardingNavigator} />
-        ) : (
-          <RootStack.Screen name="Main" component={MainTabs} />
-        )}
-      </RootStack.Navigator>
-    </NavigationContainer>
+    <RootStack.Navigator screenOptions={{ headerShown: false }}>
+      {showOnboarding ? (
+        <RootStack.Screen name="Onboarding" component={OnboardingNavigator} />
+      ) : (
+        <RootStack.Screen name="MainNav" component={MainNavigator} />
+      )}
+    </RootStack.Navigator>
   );
 }

@@ -1,7 +1,17 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { User, Obligation, InsightsData, MorningBrief } from '../types';
+import { User, UIObligation, InsightsData, MorningBrief } from '../types';
 import { STORAGE_KEYS } from '../constants';
+
+// ── Mock data uses UIObligation — clean, no backend fields needed ──────────────
+const INITIAL_OBLIGATIONS: UIObligation[] = [
+  { _id: '1', emoji: '🛂', title: 'UAE Residence Visa',  type: 'visa',            daysUntil: 8,  risk: 'high',   amount: null,  status: 'active', executionPath: 'GDRFA website — 45min process', notes: 'Requires passport + EID copy' },
+  { _id: '2', emoji: '🪪', title: 'Emirates ID Renewal', type: 'emirates_id',     daysUntil: 22, risk: 'medium', amount: 370,   status: 'active', executionPath: 'ICA smart app — 20min',         notes: null },
+  { _id: '3', emoji: '🚗', title: 'Car Registration',    type: 'car_registration', daysUntil: 31, risk: 'medium', amount: 450,   status: 'active', executionPath: 'RTA online portal',             notes: 'Needs insurance first' },
+  { _id: '4', emoji: '🛡️', title: 'Car Insurance',       type: 'insurance',       daysUntil: 45, risk: 'low',    amount: 2100,  status: 'active', executionPath: 'AXA UAE app',                   notes: null },
+  { _id: '5', emoji: '💡', title: 'DEWA Bill',           type: 'bill',            daysUntil: 12, risk: 'low',    amount: 850,   status: 'active', executionPath: 'DEWA app — auto pay',           notes: null },
+  { _id: '6', emoji: '🎓', title: 'School Fee — Q3',     type: 'school_fee',      daysUntil: 0,  risk: 'high',   amount: 14000, status: 'active', executionPath: 'School parent portal',          notes: 'Due today' },
+];
 
 interface AppState {
   // Auth
@@ -12,10 +22,16 @@ interface AppState {
   logout: () => Promise<void>;
   updateUser: (user: User) => void;
 
-  // Obligations
-  obligations: Obligation[];
-  setObligations: (obs: Obligation[]) => void;
-  updateObligation: (id: string, updates: Partial<Obligation>) => void;
+  // Onboarding
+  setOnboardingComplete: () => void;
+
+  // Obligations — all UIObligation now
+  obligations: UIObligation[];
+  setObligations: (obs: UIObligation[]) => void;
+  updateObligation: (id: string, updates: Partial<UIObligation>) => void;
+  addObligation: (ob: UIObligation) => void;
+  addObligations: (obs: UIObligation[]) => void;
+  resolveObligation: (id: string) => void;
 
   // Insights
   insights: InsightsData | null;
@@ -34,7 +50,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   token: null,
   user: null,
   isAuthenticated: false,
-  obligations: [],
+  obligations: INITIAL_OBLIGATIONS,
   insights: null,
   morningBrief: null,
   isLoading: false,
@@ -47,10 +63,17 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   logout: async () => {
     await AsyncStorage.multiRemove([STORAGE_KEYS.AUTH_TOKEN, STORAGE_KEYS.USER]);
-    set({ token: null, user: null, isAuthenticated: false, obligations: [], insights: null, morningBrief: null });
+    set({ token: null, user: null, isAuthenticated: false, obligations: INITIAL_OBLIGATIONS, insights: null, morningBrief: null });
   },
 
   updateUser: (user) => set({ user }),
+
+  setOnboardingComplete: () => {
+    const { user } = get();
+    const updated = user ? { ...user, onboardingComplete: true } : user;
+    set({ user: updated });
+    if (updated) AsyncStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updated));
+  },
 
   setObligations: (obligations) => set({ obligations }),
 
@@ -58,6 +81,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     const updated = get().obligations.map(o => o._id === id ? { ...o, ...updates } : o);
     set({ obligations: updated });
   },
+
+  addObligation: (ob) => set((state) => ({
+    obligations: [ob, ...state.obligations],
+  })),
+
+  addObligations: (obs) => set((state) => ({
+    obligations: [...obs, ...state.obligations],
+  })),
+
+  resolveObligation: (id) => set((state) => ({
+    obligations: state.obligations.map(o =>
+      o._id === id ? { ...o, status: 'completed' } : o
+    ),
+  })),
 
   setInsights: (insights) => set({ insights }),
   setMorningBrief: (morningBrief) => set({ morningBrief }),
