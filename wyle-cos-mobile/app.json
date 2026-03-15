@@ -44,7 +44,8 @@
       [
         "expo-camera",
         { "cameraPermission": "Wyle uses camera to scan your documents." }
-      ]
+      ],
+      "./plugins/withAndroidExcludeSupport"
     ],
     "experiments": {
       "typedRoutes": true
