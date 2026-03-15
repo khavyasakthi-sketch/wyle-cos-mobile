@@ -1,6 +1,9 @@
 // src/services/googleAuthService.ts
 // Handles Google OAuth for Gmail + Calendar access
-// Requires: EXPO_PUBLIC_GOOGLE_CLIENT_ID in .env
+// Requires platform-specific client IDs in .env:
+//   EXPO_PUBLIC_GOOGLE_CLIENT_ID         — Web application client (fallback)
+//   EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID — Android OAuth client (for APK builds)
+//   EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS     — iOS OAuth client (for IPA builds)
 
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
@@ -9,7 +12,29 @@ import { Platform } from 'react-native';
 
 WebBrowser.maybeCompleteAuthSession();
 
-const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? '';
+// Pick the right client ID based on platform
+function getClientId(): string {
+  if (Platform.OS === 'android') {
+    return process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID
+        ?? process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID
+        ?? '';
+  }
+  if (Platform.OS === 'ios') {
+    return process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS
+        ?? process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID
+        ?? '';
+  }
+  // web — returns empty, signInWithGoogle exits early
+  return process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? '';
+}
+
+// expo-auth-session v7 (SDK 54+) removed the auth.expo.io proxy.
+// makeRedirectUri() returns:
+//   - Expo Go (tunnel): exp://xxx.exp.direct  → register in Google Cloud Console each session
+//   - Standalone APK:   com.wyle.cos://       → registered once in Android OAuth client
+export function getOAuthRedirectUri(): string {
+  return AuthSession.makeRedirectUri({ scheme: 'com.wyle.cos' });
+}
 
 const SCOPES = [
   'openid',
@@ -63,15 +88,21 @@ const discovery = {
 
 // ── Sign in with Google ────────────────────────────────────────────────────────
 export async function signInWithGoogle(): Promise<GoogleAuthResult> {
-  if (!GOOGLE_CLIENT_ID) {
-    return { success: false, error: 'EXPO_PUBLIC_GOOGLE_CLIENT_ID not set in .env' };
+  if (Platform.OS === 'web') {
+    return { success: false, error: 'web' }; // ConnectScreen handles this case
+  }
+  const clientId = getClientId();
+  if (!clientId) {
+    return { success: false, error: 'Google Client ID not set in .env' };
   }
 
   try {
-    const redirectUri = AuthSession.makeRedirectUri({ scheme: 'wyle' });
+    const redirectUri = getOAuthRedirectUri();
+    console.log('[GoogleAuth] redirect URI →', redirectUri); // copy this into Google Cloud Console
+    console.log('[GoogleAuth] platform →', Platform.OS);
 
     const request = new AuthSession.AuthRequest({
-      clientId:            GOOGLE_CLIENT_ID,
+      clientId,
       scopes:              SCOPES,
       redirectUri,
       responseType:        AuthSession.ResponseType.Code,
@@ -88,7 +119,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
     // Exchange code for tokens
     const tokenRes = await AuthSession.exchangeCodeAsync(
       {
-        clientId:     GOOGLE_CLIENT_ID,
+        clientId,
         code:         result.params.code,
         redirectUri,
         extraParams:  { code_verifier: request.codeVerifier ?? '' },
@@ -131,13 +162,14 @@ export async function getAccessToken(): Promise<string | null> {
 
     // Try refresh
     const refresh = await getItem(SECURE_KEYS.REFRESH_TOKEN);
-    if (!refresh || !GOOGLE_CLIENT_ID) return null;
+    const clientId = getClientId();
+    if (!refresh || !clientId) return null;
 
     const res = await fetch('https://oauth2.googleapis.com/token', {
       method:  'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id:     GOOGLE_CLIENT_ID,
+        client_id:     clientId,
         refresh_token: refresh,
         grant_type:    'refresh_token',
       }).toString(),
