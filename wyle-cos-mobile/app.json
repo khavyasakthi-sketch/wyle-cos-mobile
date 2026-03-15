@@ -12,9 +12,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#000000"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.wyle.cos",
@@ -34,9 +32,7 @@
       "permissions": [
         "RECORD_AUDIO",
         "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "READ_EXTERNAL_STORAGE"
       ]
     },
     "web": {
@@ -47,22 +43,12 @@
       "expo-secure-store",
       [
         "expo-camera",
-        {
-          "cameraPermission": "Wyle uses camera to scan your documents."
-        }
+        { "cameraPermission": "Wyle uses camera to scan your documents." }
       ],
-      "expo-font",
-      "expo-web-browser",
-      "@react-native-voice/voice"
+      "./plugins/withAndroidExcludeSupport"
     ],
     "experiments": {
       "typedRoutes": true
-    },
-    "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "f8c38aab-ed23-41da-af88-abaa0a18fabb"
-      }
     }
   }
 }
