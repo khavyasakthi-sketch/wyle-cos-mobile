@@ -73,5 +73,5 @@ export default function AppEntry() {
 }
 
 const s = StyleSheet.create({
-  loader: { flex: 1, backgroundColor: '#002F3A', alignItems: 'center', justifyContent: 'center' },
+  loader: { flex: 1, backgroundColor: '#0D0D0D', alignItems: 'center', justifyContent: 'center' },
 });

@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Dimensions, Animated, StatusBar, ActivityIndicator,
+  Dimensions, Animated, StatusBar, ActivityIndicator, Alert, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -15,6 +15,8 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import { UIObligation } from '../../types';
 import { generateBrief, getBriefKey, getBriefTimeOfDay, isBriefStale } from '../../services/briefService';
+import { signInWithGoogle, isGoogleConnected } from '../../services/googleAuthService';
+import { runFullSignalScan } from '../../services/signalService';
 
 const { width } = Dimensions.get('window');
 
@@ -292,17 +294,23 @@ function TabBar({ active, onTab }: { active: string; onTab: (s: any) => void }) 
 export default function HomeScreen({ navigation }: { navigation: NavProp }) {
   const nav = navigation ?? { navigate: (_: any) => {}, goBack: () => {} };
 
-  const obligations     = useAppStore(st => st.obligations);
-  const morningBrief    = useAppStore(st => st.morningBrief);
-  const setMorningBrief = useAppStore(st => st.setMorningBrief);
-  const lastBriefKey    = useAppStore(st => st.lastBriefKey);
-  const setLastBriefKey = useAppStore(st => st.setLastBriefKey);
-  const googleConnected = useAppStore(st => st.googleConnected);
+  const obligations        = useAppStore(st => st.obligations);
+  const addObligations     = useAppStore(st => st.addObligations);
+  const morningBrief       = useAppStore(st => st.morningBrief);
+  const setMorningBrief    = useAppStore(st => st.setMorningBrief);
+  const lastBriefKey       = useAppStore(st => st.lastBriefKey);
+  const setLastBriefKey    = useAppStore(st => st.setLastBriefKey);
+  const googleConnected    = useAppStore(st => st.googleConnected);
+  const googleEmail        = useAppStore(st => st.googleEmail);
+  const setGoogleConnected = useAppStore(st => st.setGoogleConnected);
+  const setGoogleEmail     = useAppStore(st => st.setGoogleEmail);
 
-  const [userName, setUserName]   = useState('');
-  const [timeStr,  setTimeStr]    = useState(getTimeString());
-  const [greeting, setGreeting]   = useState(getGreeting());
-  const [briefLoading, setBriefLoading] = useState(false);
+  const [userName,        setUserName]        = useState('');
+  const [timeStr,         setTimeStr]         = useState(getTimeString());
+  const [greeting,        setGreeting]        = useState(getGreeting());
+  const [briefLoading,    setBriefLoading]    = useState(false);
+  const [googleConnecting, setGoogleConnecting] = useState(false);
+  const [scanSummary,     setScanSummary]     = useState<string | null>(null);
 
   const fadeIn        = useRef(new Animated.Value(0)).current;
   const slideUp       = useRef(new Animated.Value(20)).current;
@@ -337,6 +345,13 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       }
     });
 
+    // Check if Google was already connected from Profile screen
+    if (Platform.OS !== 'web') {
+      isGoogleConnected().then(({ connected, email }) => {
+        if (connected) { setGoogleConnected(true); setGoogleEmail(email); }
+      });
+    }
+
     // Update clock every minute
     const tick = setInterval(() => {
       setTimeStr(getTimeString());
@@ -360,6 +375,52 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
 
     return () => clearInterval(tick);
   }, []);
+
+  // ── Google OAuth connect (called directly from signal banner) ─────────────
+  const handleGoogleConnect = async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert('Not supported', 'Google sign-in is available on the Android/iOS app.');
+      return;
+    }
+    setGoogleConnecting(true);
+    setScanSummary(null);
+    try {
+      const result = await signInWithGoogle();
+      if (!result.success) {
+        Alert.alert(
+          'Connection failed',
+          result.error === 'Cancelled'
+            ? 'Sign-in was cancelled.'
+            : result.error || 'Could not connect to Google. Check your internet connection.',
+        );
+        return;
+      }
+      // Store connected state immediately so banner hides
+      setGoogleConnected(true);
+      setGoogleEmail(result.email);
+
+      // Run signal scan — parse Gmail + Calendar for obligations
+      try {
+        const scan = await runFullSignalScan(
+          result.accessToken,
+          obligations.filter(o => o.status !== 'completed'),
+        );
+        if (scan.obligations.length > 0) {
+          addObligations(scan.obligations);
+        }
+        setScanSummary(scan.summary);
+        Alert.alert(
+          'Gmail & Calendar connected ✓',
+          `Signed in as ${result.email}.\n\n${scan.summary}`,
+        );
+      } catch {
+        // Scan failed but auth succeeded — that's fine
+        Alert.alert('Connected ✓', `Gmail connected as ${result.email}. Calendar scan will retry shortly.`);
+      }
+    } finally {
+      setGoogleConnecting(false);
+    }
+  };
 
   // ── Re-generate brief whenever obligations change ─────────────────────────
   // Fingerprint = "<total>:<active>:<high-risk titles>" so any add/resolve/
@@ -445,23 +506,48 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
           </Animated.View>
         )}
 
-        {/* ── Life Signal Banner (if Gmail not connected) ─────────────────── */}
-        {!googleConnected && (
-          <Animated.View style={{ opacity: fadeIn }}>
+        {/* ── Life Signal Banner — Gmail connect or connected state ─────── */}
+        <Animated.View style={{ opacity: fadeIn }}>
+          {!googleConnected ? (
+            /* Not connected — tap triggers OAuth directly */
             <TouchableOpacity
               style={s.signalBanner}
+              onPress={handleGoogleConnect}
+              disabled={googleConnecting}
+              activeOpacity={0.85}
+            >
+              {googleConnecting
+                ? <ActivityIndicator color={C.chartreuse} size="small" style={{ width: 28 }} />
+                : <Text style={s.signalEmoji}>⚡</Text>
+              }
+              <View style={{ flex: 1 }}>
+                <Text style={s.signalTitle}>
+                  {googleConnecting ? 'Connecting to Google…' : 'Connect Gmail & Calendar'}
+                </Text>
+                <Text style={s.signalSub}>
+                  {googleConnecting
+                    ? 'Please complete sign-in in the browser'
+                    : 'Let Buddy auto-detect obligations from your inbox'}
+                </Text>
+              </View>
+              {!googleConnecting && <Text style={{ color: C.chartreuse, fontSize: 18 }}>›</Text>}
+            </TouchableOpacity>
+          ) : (
+            /* Connected — show status + tap goes to Profile */
+            <TouchableOpacity
+              style={[s.signalBanner, s.signalBannerConnected]}
               onPress={() => nav.navigate('connect')}
               activeOpacity={0.85}
             >
-              <Text style={s.signalEmoji}>⚡</Text>
+              <Text style={s.signalEmoji}>✓</Text>
               <View style={{ flex: 1 }}>
-                <Text style={s.signalTitle}>Connect Gmail & Calendar</Text>
-                <Text style={s.signalSub}>Let Buddy auto-detect obligations from your inbox</Text>
+                <Text style={[s.signalTitle, { color: C.verdigris }]}>Gmail & Calendar connected</Text>
+                <Text style={s.signalSub}>{googleEmail || 'Scanning inbox for obligations'}</Text>
               </View>
-              <Text style={{ color: C.chartreuse, fontSize: 18 }}>›</Text>
+              <View style={s.connectedDot} />
             </TouchableOpacity>
-          </Animated.View>
-        )}
+          )}
+        </Animated.View>
 
         {/* ── Priority Tasks ─────────────────────────────────────────────────── */}
         <Animated.View style={[s.section, { opacity: fadeIn }]}>
@@ -661,9 +747,11 @@ const s = StyleSheet.create({
     marginHorizontal: 16, marginBottom: 14,
     borderWidth: 1, borderColor: `${C.chartreuse}28`,
   },
-  signalEmoji: { fontSize: 20 },
-  signalTitle: { color: C.chartreuse, fontSize: 13, fontWeight: '700', marginBottom: 2 },
-  signalSub:   { color: C.textSec, fontSize: 11 },
+  signalEmoji:           { fontSize: 20, width: 28, textAlign: 'center' },
+  signalTitle:           { color: C.chartreuse, fontSize: 13, fontWeight: '700', marginBottom: 2 },
+  signalSub:             { color: C.textSec, fontSize: 11 },
+  signalBannerConnected: { borderColor: `${C.verdigris}40`, backgroundColor: `${C.verdigris}0D` },
+  connectedDot:          { width: 8, height: 8, borderRadius: 4, backgroundColor: C.verdigris },
 
   // ── Tab bar
   tabBar: {
