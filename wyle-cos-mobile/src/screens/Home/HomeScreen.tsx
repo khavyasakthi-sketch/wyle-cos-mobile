@@ -370,12 +370,10 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       }
     });
 
-    // Check if Google was already connected from Profile screen
-    if (Platform.OS !== 'web') {
-      isGoogleConnected().then(({ connected, email }) => {
-        if (connected) { setGoogleConnected(true); setGoogleEmail(email); }
-      });
-    }
+    // Check if Google was already connected (works on web + native)
+    isGoogleConnected().then(({ connected, email }) => {
+      if (connected) { setGoogleConnected(true); setGoogleEmail(email); }
+    });
 
     // Update clock every minute
     const tick = setInterval(() => {
@@ -535,10 +533,10 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
           </Animated.View>
         )}
 
-        {/* ── Google Account Card ──────────────────────────────────────────── */}
+        {/* ── Google Calendar Card ──────────────────────────────────────────── */}
         {!googleConnected ? (
           <Animated.View style={[s.googleCard, { opacity: fadeIn }]}>
-            <Text style={s.googleCardLabel}>CONNECT YOUR ACCOUNTS</Text>
+            <Text style={s.googleCardLabel}>SYNC YOUR SCHEDULE</Text>
 
             {/* Official-style Google button */}
             <TouchableOpacity
@@ -558,30 +556,30 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
               <View style={s.googleBtnDivider} />
               {/* Label */}
               <Text style={s.googleBtnLabel}>
-                {googleConnecting ? 'Signing in…' : 'Sign in with Google'}
+                {googleConnecting ? 'Connecting calendar…' : 'Connect Google Calendar & Gmail'}
               </Text>
             </TouchableOpacity>
 
             <Text style={s.googleCardSub}>
-              Read-only access · Gmail & Calendar · Auto-detects upcoming obligations
+              Detects meeting conflicts · alerts you before clashes · read-only access
             </Text>
           </Animated.View>
         ) : (
-          /* Connected state — verdigris success card */
+          /* Connected state — tap to open calendar view */
           <Animated.View style={{ opacity: fadeIn }}>
             <TouchableOpacity
               style={s.googleConnectedCard}
-              onPress={() => nav.navigate('connect')}
+              onPress={() => nav.navigate('calendar')}
               activeOpacity={0.85}
             >
               <View style={s.googleConnectedIcon}>
-                <Text style={{ fontSize: 16 }}>✓</Text>
+                <Text style={{ fontSize: 16 }}>📅</Text>
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={s.googleConnectedTitle}>Google account connected</Text>
-                <Text style={s.googleConnectedSub}>{googleEmail}</Text>
+                <Text style={s.googleConnectedTitle}>Calendar & Gmail connected</Text>
+                <Text style={s.googleConnectedSub}>Tap to view upcoming meetings · {googleEmail}</Text>
               </View>
-              <View style={s.connectedDot} />
+              <Text style={s.connectedArrow}>›</Text>
             </TouchableOpacity>
           </Animated.View>
         )}
@@ -830,7 +828,7 @@ const s = StyleSheet.create({
   },
   googleConnectedTitle: { color: C.verdigris, fontSize: 13, fontWeight: '700', marginBottom: 2 },
   googleConnectedSub:   { color: C.textSec, fontSize: 11 },
-  connectedDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.verdigris },
+  connectedArrow: { color: C.chartreuse, fontSize: 20, fontWeight: '300' },
 
   // ── Tab bar
   tabBar: {
