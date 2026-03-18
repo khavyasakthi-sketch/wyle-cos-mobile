@@ -225,14 +225,6 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
               />
 
               <Text style={styles.tagline}>DIGITAL CHIEF OF STAFF</Text>
-
-              {/* Subtle second underline below tagline */}
-              <LinearGradient
-                colors={['transparent', C.textTer, 'transparent']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.taglineUnderline}
-              />
             </View>
 
             {/* ── Headline ───────────────────────────────────────────────── */}
@@ -409,8 +401,8 @@ const styles = StyleSheet.create({
   // ── Header
   header: { alignItems: 'center', marginTop: 16, marginBottom: 32 },
   logo: {
-    fontSize: 42,
-    fontWeight: '900',
+    fontSize: 46,
+    fontWeight: '200',      // slim / ultra-light
     color: '#FFFFFF',
     letterSpacing: 10,
     // Subtle glow shadow on the WYLE wordmark
@@ -418,11 +410,12 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 12,
   },
-  // Shining gradient line immediately under WYLE
+  // Single shining gradient line — sits between WYLE and DIGITAL CHIEF OF STAFF
+  // Width tuned to span from the outer edge of W to the outer edge of E
   logoUnderline: {
-    height: 2,
-    width: 100,
-    marginTop: 6,
+    height: 1,              // thinner than before
+    width: 118,             // covers W → E at fontSize 46 + letterSpacing 10
+    marginTop: 8,
     marginBottom: 10,
     borderRadius: 1,
   },
@@ -432,17 +425,8 @@ const styles = StyleSheet.create({
     color: C.textSec,
     letterSpacing: 4,
   },
-  // Subtle dimmer line under DIGITAL CHIEF OF STAFF
-  taglineUnderline: {
-    height: 1,
-    width: 160,
-    marginTop: 6,
-    borderRadius: 1,
-    opacity: 0.5,
-  },
-
   // ── Headline
-  headline: { fontSize: 28, fontWeight: '800', color: C.white, textAlign: 'center', marginBottom: 8 },
+  headline: { fontSize: 26, fontWeight: '300', color: C.white, textAlign: 'center', marginBottom: 8 },
   subline:  { fontSize: 14, color: C.textSec, textAlign: 'center', marginBottom: 28, lineHeight: 20 },
 
   // ── Mode toggle
