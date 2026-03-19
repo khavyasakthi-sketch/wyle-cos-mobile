@@ -132,3 +132,68 @@ export function isSameDay(a: Date, b: Date): boolean {
 export function durationMins(start: Date, end: Date): number {
   return Math.round((end.getTime() - start.getTime()) / 60_000);
 }
+
+// ── Conflict check for a proposed time slot ───────────────────────────────────
+/**
+ * Given a proposed start + end time, fetches Google Calendar events
+ * in that window and returns any that overlap (i.e. conflicts).
+ * Returns [] if not connected or on any error.
+ */
+export async function checkTimeConflicts(
+  proposedStart: Date,
+  proposedEnd:   Date,
+): Promise<CalendarEvent[]> {
+  try {
+    const token = await getAccessToken();
+    if (!token) return [];
+
+    // Fetch events in a window around the proposed slot
+    const params = new URLSearchParams({
+      calendarId:   'primary',
+      timeMin:      proposedStart.toISOString(),
+      timeMax:      proposedEnd.toISOString(),
+      singleEvents: 'true',
+      orderBy:      'startTime',
+      maxResults:   '10',
+    });
+
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return [];
+
+    const data  = await res.json();
+    const items: any[] = data.items ?? [];
+
+    const events: CalendarEvent[] = items.map(item => {
+      const isAllDay = !!item.start?.date && !item.start?.dateTime;
+      const startRaw = item.start?.dateTime ?? item.start?.date ?? proposedStart.toISOString();
+      const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? proposedEnd.toISOString();
+      return {
+        id:          item.id ?? '',
+        title:       item.summary ?? '(No title)',
+        description: item.description ?? '',
+        location:    item.location ?? '',
+        startTime:   new Date(startRaw),
+        endTime:     new Date(endRaw),
+        isAllDay,
+        attendees:   (item.attendees ?? [])
+          .map((a: any) => a.displayName ?? a.email ?? '')
+          .filter(Boolean),
+        meetLink:
+          item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
+          ?? item.hangoutLink ?? '',
+        colorId: item.colorId ?? '',
+      };
+    });
+
+    // Only return events that actually overlap (not just touch boundaries)
+    return events.filter(ev => {
+      if (ev.isAllDay) return false;
+      return ev.startTime < proposedEnd && proposedStart < ev.endTime;
+    });
+  } catch {
+    return [];
+  }
+}
