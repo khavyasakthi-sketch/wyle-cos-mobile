@@ -15,6 +15,7 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import { VoiceService } from '../../services/voiceService';
 import { UIObligation } from '../../types';
+import { checkTimeConflicts, CalendarEvent, fmtTime, fmtDate } from '../../services/calendarService';
 
 const { width } = Dimensions.get('window');
 
@@ -55,6 +56,7 @@ const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 
 const BRAIN_DUMP_SYSTEM = `You are Buddy inside Wyle — a life management app for busy professionals in Dubai, UAE.
 The user has done a voice brain dump. Extract ALL obligations, tasks, payments, renewals, deadlines from what they said.
+The user message starts with [Today is YYYY-MM-DD] — use this to resolve relative dates like "tomorrow", "Saturday", "next week".
 Return ONLY a JSON array, no explanation, no markdown, no preamble.
 
 Each item must have:
@@ -68,8 +70,10 @@ Each item must have:
 - status: "active"
 - executionPath: one short sentence on how to handle it
 - notes: extra detail mentioned, or null
+- scheduledDateTime: ISO 8601 string (e.g. "2026-03-21T09:30:00") ONLY if the user mentions a SPECIFIC date AND time for an appointment or event. Use the [Today is ...] date to resolve relative dates. Set to null if no specific time is mentioned.
+- scheduledDuration: estimated duration in minutes (default 60) for timed appointments. null if scheduledDateTime is null.
 
-Return ONLY the JSON array. Example: [{"_id":"dump_0_123","emoji":"💡","title":"DEWA Bill","type":"bill","daysUntil":7,"risk":"medium","amount":500,"status":"active","executionPath":"Pay via DEWA app","notes":null}]
+Return ONLY the JSON array. Example: [{"_id":"dump_0_123","emoji":"💡","title":"DEWA Bill","type":"bill","daysUntil":7,"risk":"medium","amount":500,"status":"active","executionPath":"Pay via DEWA app","notes":null,"scheduledDateTime":null,"scheduledDuration":null}]
 If nothing actionable, return: []`;
 
 function getDaysLabel(days: number): string {
@@ -437,6 +441,29 @@ function findObligationInText(text: string, obligations: UIObligation[]): UIObli
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ── Calendar Conflict Warning Card ────────────────────────────────────────────
+function ConflictWarningCard({ events }: { events: CalendarEvent[] }) {
+  return (
+    <View style={cw.card}>
+      <Text style={cw.icon}>⚠️</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={cw.title}>Calendar conflict detected</Text>
+        {events.map(ev => (
+          <Text key={ev.id} style={cw.detail}>
+            "{ev.title}" is already at {fmtTime(ev.startTime)}–{fmtTime(ev.endTime)} on {fmtDate(ev.startTime)}
+          </Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+const cw = StyleSheet.create({
+  card:   { flexDirection: 'row', gap: 10, backgroundColor: 'rgba(255,149,0,0.10)', borderRadius: 10, padding: 10, marginTop: 4, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,149,0,0.30)' },
+  icon:   { fontSize: 16, marginTop: 1 },
+  title:  { color: C.orange, fontSize: 12, fontWeight: '700', marginBottom: 3 },
+  detail: { color: C.textSec, fontSize: 11, lineHeight: 16 },
+});
+
 // Brain Dump Modal (all logic unchanged, dark theme applied)
 // ─────────────────────────────────────────────────────────────────────────────
 function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResolve }: {
@@ -453,12 +480,14 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
   const [freshItems, setFreshItems]         = useState<UIObligation[]>([]);
   const [dupeItems, setDupeItems]           = useState<{ incoming: UIObligation; existing: UIObligation }[]>([]);
   const [completionTarget, setCompletionTarget] = useState<UIObligation | null>(null);
+  const [conflictWarnings, setConflictWarnings] = useState<Map<string, CalendarEvent[]>>(new Map());
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (visible) {
       setVoiceState('idle'); setTranscript(''); setParsed([]);
       setShowReview(false); setFreshItems([]); setDupeItems([]); setCompletionTarget(null);
+      setConflictWarnings(new Map());
     }
   }, [visible]);
 
@@ -474,9 +503,36 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
     }
   }, [voiceState]);
 
+  const checkCalendarConflicts = async (items: UIObligation[]) => {
+    const withTime = items.filter(i => (i as any).scheduledDateTime);
+    if (withTime.length === 0) return;
+    const warnings = new Map<string, CalendarEvent[]>();
+    for (const item of withTime) {
+      const start = new Date((item as any).scheduledDateTime);
+      if (isNaN(start.getTime())) continue;
+      const durationMs = ((item as any).scheduledDuration ?? 60) * 60_000;
+      const end = new Date(start.getTime() + durationMs);
+      const conflicts = await checkTimeConflicts(start, end);
+      if (conflicts.length > 0) warnings.set(item._id, conflicts);
+    }
+    setConflictWarnings(warnings);
+    // Announce if conflicts found
+    if (warnings.size > 0) {
+      Speech.speak(
+        `Heads up — ${warnings.size} of your tasks conflict with existing calendar events.`,
+        { language: 'en-US', rate: 0.95 }
+      );
+    }
+  };
+
   const parseWithClaude = async (text: string) => {
     setVoiceState('parsing');
+    setConflictWarnings(new Map());
     try {
+      // Inject today's date so Claude can resolve relative dates
+      const today = new Date().toISOString().split('T')[0];
+      const textWithDate = `[Today is ${today}]\n${text}`;
+
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -489,7 +545,7 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
           model: 'claude-sonnet-4-20250514',
           max_tokens: 1500,
           system: BRAIN_DUMP_SYSTEM,
-          messages: [{ role: 'user', content: text }],
+          messages: [{ role: 'user', content: textWithDate }],
         }),
       });
       const data = await res.json();
@@ -502,6 +558,8 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
       if (stamped.length > 0) {
         Speech.speak(`Found ${stamped.length} ${stamped.length === 1 ? 'task' : 'tasks'}.`, { language: 'en-US', rate: 0.95 });
       }
+      // Check for calendar conflicts (non-blocking)
+      checkCalendarConflicts(stamped);
     } catch {
       setVoiceState('error');
     }
@@ -627,22 +685,29 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
           )}
 
           {!completionTarget && parsed.length > 0 && (
-            <ScrollView style={{ maxHeight: 220 }} showsVerticalScrollIndicator={false}>
-              <Text style={bd.resultsLabel}>BUDDY FOUND {parsed.length} {parsed.length === 1 ? 'TASK' : 'TASKS'}</Text>
+            <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
+              <Text style={bd.resultsLabel}>
+                BUDDY FOUND {parsed.length} {parsed.length === 1 ? 'TASK' : 'TASKS'}
+                {conflictWarnings.size > 0 ? `  ·  ⚠️ ${conflictWarnings.size} CONFLICT${conflictWarnings.size > 1 ? 'S' : ''}` : ''}
+              </Text>
               {parsed.map(item => {
                 const rc = RISK_COLORS[item.risk as Risk];
+                const conflicts = conflictWarnings.get(item._id);
                 return (
-                  <View key={item._id} style={[bd.parsedCard, { borderLeftColor: rc }]}>
-                    <Text style={bd.parsedEmoji}>{item.emoji}</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={bd.parsedTitle}>{item.title}</Text>
-                      <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
-                        <Text style={[bd.parsedRisk, { color: rc }]}>{item.risk.toUpperCase()}</Text>
-                        <Text style={bd.parsedDays}>{getDaysLabel(item.daysUntil)}</Text>
-                        {item.amount && <Text style={bd.parsedAmount}>AED {item.amount.toLocaleString()}</Text>}
+                  <View key={item._id}>
+                    <View style={[bd.parsedCard, { borderLeftColor: conflicts ? C.orange : rc }]}>
+                      <Text style={bd.parsedEmoji}>{item.emoji}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={bd.parsedTitle}>{item.title}</Text>
+                        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
+                          <Text style={[bd.parsedRisk, { color: rc }]}>{item.risk.toUpperCase()}</Text>
+                          <Text style={bd.parsedDays}>{getDaysLabel(item.daysUntil)}</Text>
+                          {item.amount && <Text style={bd.parsedAmount}>AED {item.amount.toLocaleString()}</Text>}
+                        </View>
                       </View>
+                      <View style={bd.newBadge}><Text style={bd.newText}>NEW</Text></View>
                     </View>
-                    <View style={bd.newBadge}><Text style={bd.newText}>NEW</Text></View>
+                    {conflicts && <ConflictWarningCard events={conflicts} />}
                   </View>
                 );
               })}
