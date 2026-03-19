@@ -196,6 +196,79 @@ export async function fetchEventsForDateRange(
   }
 }
 
+// ── Day overload detection ────────────────────────────────────────────────────
+/**
+ * Threshold: 4+ non-all-day meetings on a single day = overloaded.
+ * Based on spec: flag when load exceeds >1.5x historical average.
+ * For MVP with no history, we use a fixed threshold of 4 meetings.
+ */
+export const OVERLOAD_THRESHOLD = 4;
+
+export interface DayOverloadResult {
+  isOverloaded: boolean;
+  count:     number;          // number of non-all-day meetings on that day
+  events:    CalendarEvent[]; // all timed meetings on that day
+  threshold: number;
+}
+
+export async function detectDayOverload(date: Date): Promise<DayOverloadResult> {
+  const empty: DayOverloadResult = { isOverloaded: false, count: 0, events: [], threshold: OVERLOAD_THRESHOLD };
+  try {
+    const token = await getAccessToken();
+    if (!token) return empty;
+
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const params = new URLSearchParams({
+      calendarId:   'primary',
+      timeMin:      startOfDay.toISOString(),
+      timeMax:      endOfDay.toISOString(),
+      singleEvents: 'true',
+      orderBy:      'startTime',
+      maxResults:   '50',
+    });
+
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return empty;
+
+    const data  = await res.json();
+    const items: any[] = data.items ?? [];
+
+    const events: CalendarEvent[] = items.map(item => {
+      const isAllDay = !!item.start?.date && !item.start?.dateTime;
+      const startRaw = item.start?.dateTime ?? item.start?.date ?? startOfDay.toISOString();
+      const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? endOfDay.toISOString();
+      return {
+        id:          item.id ?? '',
+        title:       item.summary ?? '(No title)',
+        description: item.description ?? '',
+        location:    item.location ?? '',
+        startTime:   new Date(startRaw),
+        endTime:     new Date(endRaw),
+        isAllDay,
+        attendees:   (item.attendees ?? []).map((a: any) => a.displayName ?? a.email ?? '').filter(Boolean),
+        meetLink:
+          item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
+          ?? item.hangoutLink ?? '',
+        colorId: item.colorId ?? '',
+      };
+    });
+
+    // Only timed (non-all-day) meetings count toward overload
+    const meetings   = events.filter(ev => !ev.isAllDay);
+    const isOverloaded = meetings.length >= OVERLOAD_THRESHOLD;
+    return { isOverloaded, count: meetings.length, events: meetings, threshold: OVERLOAD_THRESHOLD };
+  } catch {
+    return empty;
+  }
+}
+
 // ── Conflict check for a proposed time slot ───────────────────────────────────
 /**
  * Given a proposed start + end time, fetches Google Calendar events

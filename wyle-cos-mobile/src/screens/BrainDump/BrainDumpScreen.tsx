@@ -11,7 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Speech from 'expo-speech';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
-import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate } from '../../services/calendarService';
+import { checkTimeConflicts, fetchEventsForDateRange, detectDayOverload, CalendarEvent, fmtTime, fmtDate, OVERLOAD_THRESHOLD } from '../../services/calendarService';
 import type { NavProp } from '../../../app/index';
 
 const C = {
@@ -208,7 +208,17 @@ const wv = StyleSheet.create({
 });
 
 // ── Parsed obligation preview card ────────────────────────────────────────────
-function ObligationPreview({ item, conflictEvents = [] }: { item: ParsedObligation; conflictEvents?: CalendarEvent[] }) {
+type OverloadInfo = { count: number; events: CalendarEvent[] };
+
+function ObligationPreview({
+  item,
+  conflictEvents = [],
+  overload = null,
+}: {
+  item: ParsedObligation;
+  conflictEvents?: CalendarEvent[];
+  overload?: OverloadInfo | null;
+}) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(16)).current;
 
@@ -219,8 +229,9 @@ function ObligationPreview({ item, conflictEvents = [] }: { item: ParsedObligati
     ]).start();
   }, []);
 
-  const hasConflict = conflictEvents.length > 0;
-  const riskColor   = hasConflict ? C.crimson : item.risk === 'high' ? C.crimson : item.risk === 'medium' ? C.chartreuse : C.verdigris;
+  const hasConflict  = conflictEvents.length > 0;
+  const hasOverload  = !!overload;
+  const riskColor    = hasConflict ? C.crimson : hasOverload ? C.salmon : item.risk === 'high' ? C.crimson : item.risk === 'medium' ? C.chartreuse : C.verdigris;
 
   return (
     <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }], marginBottom: 10 }}>
@@ -259,6 +270,19 @@ function ObligationPreview({ item, conflictEvents = [] }: { item: ParsedObligati
           </View>
         </View>
       )}
+
+      {/* 🔴 Day overload warning banner */}
+      {hasOverload && overload && (
+        <View style={op.overloadBanner}>
+          <Text style={op.overloadIcon}>🔴</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={op.overloadTitle}>Day Overload Detected</Text>
+            <Text style={op.overloadDetail}>
+              {item.scheduledTime ? fmtDate(new Date(item.scheduledTime)) : 'That day'} already has {overload.count} meetings (threshold: {OVERLOAD_THRESHOLD}+). This may exceed your daily capacity.
+            </Text>
+          </View>
+        </View>
+      )}
     </Animated.View>
   );
 }
@@ -280,6 +304,11 @@ const op = StyleSheet.create({
   conflictIcon:   { fontSize: 14, marginTop: 1 },
   conflictTitle:  { color: C.crimson, fontSize: 11, fontWeight: '700', marginBottom: 3 },
   conflictDetail: { color: `${C.crimson}CC`, fontSize: 11, lineHeight: 16 },
+  // Overload banner — attached below conflict banner (or below card if no conflict)
+  overloadBanner: { backgroundColor: `${C.salmon}18`, borderWidth: 1, borderTopWidth: 0, borderColor: C.salmon, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, padding: 10, flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  overloadIcon:   { fontSize: 14, marginTop: 1 },
+  overloadTitle:  { color: C.salmon, fontSize: 11, fontWeight: '700', marginBottom: 3 },
+  overloadDetail: { color: `${C.salmon}CC`, fontSize: 11, lineHeight: 16 },
 });
 
 // ── Calendar event card (for query results) ───────────────────────────────────
@@ -337,8 +366,9 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
   const [voiceMode, setVoiceMode]           = useState<VoiceMode>('task_creation');
   const [transcript, setTranscript]         = useState('');
   const [parsed, setParsed]                 = useState<ParsedObligation[]>([]);
-  const [conflicts, setConflicts]           = useState<Record<string, CalendarEvent[]>>({});
-  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [conflicts, setConflicts]             = useState<Record<string, CalendarEvent[]>>({});
+  const [overloadWarnings, setOverloadWarnings] = useState<Record<string, OverloadInfo>>({});
+  const [calendarEvents, setCalendarEvents]   = useState<CalendarEvent[]>([]);
   const [calendarQueryLabel, setCalendarQueryLabel] = useState('');
   const [savedCount, setSavedCount]         = useState(0);
   const [tipIndex, setTipIndex]             = useState(0);
@@ -487,15 +517,32 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
       );
       setConflicts(conflictsMap);
 
+      // ── Overload check: detect days with too many meetings ──────────────────
+      const overloadMap: Record<string, OverloadInfo> = {};
+      await Promise.all(
+        stamped.map(async (item) => {
+          if (!item.scheduledTime) return;
+          try {
+            const date = new Date(item.scheduledTime);
+            if (isNaN(date.getTime())) return;
+            const result = await detectDayOverload(date);
+            if (result.isOverloaded) overloadMap[item._id] = { count: result.count, events: result.events };
+          } catch { /* silently skip if calendar not connected */ }
+        })
+      );
+      setOverloadWarnings(overloadMap);
+
       setParsed(stamped);
       setVoiceState('done');
 
-      // Announce result (mention conflicts if any)
+      // Announce result (mention conflicts + overload if any)
       const conflictCount = Object.keys(conflictsMap).length;
+      const overloadCount = Object.keys(overloadMap).length;
       if (stamped.length > 0) {
-        const msg = conflictCount > 0
-          ? `Got it. I found ${stamped.length} ${stamped.length === 1 ? 'item' : 'items'}. Warning — ${conflictCount} ${conflictCount === 1 ? 'has a' : 'have'} calendar conflict.`
-          : `Got it. I found ${stamped.length} ${stamped.length === 1 ? 'item' : 'items'} to add.`;
+        let msg = `Got it. I found ${stamped.length} ${stamped.length === 1 ? 'item' : 'items'}.`;
+        if (conflictCount > 0) msg += ` Warning — ${conflictCount} ${conflictCount === 1 ? 'has a' : 'have'} calendar conflict.`;
+        if (overloadCount > 0) msg += ` Also, ${overloadCount} ${overloadCount === 1 ? 'day is' : 'days are'} already overloaded with meetings.`;
+        if (conflictCount === 0 && overloadCount === 0) msg = `Got it. I found ${stamped.length} ${stamped.length === 1 ? 'item' : 'items'} to add.`;
         Speech.speak(msg, { language: 'en-US', rate: 0.95 });
       }
 
@@ -522,6 +569,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
   const handleDiscard = () => {
     setParsed([]);
     setConflicts({});
+    setOverloadWarnings({});
     setCalendarEvents([]);
     setCalendarQueryLabel('');
     setTranscript('');
@@ -613,12 +661,14 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
             <Text style={s.resultsLabel}>
               BUDDY FOUND {parsed.length} {parsed.length === 1 ? 'TASK' : 'TASKS'}
               {Object.keys(conflicts).length > 0 && ` · ⚠️ ${Object.keys(conflicts).length} CONFLICT`}
+              {Object.keys(overloadWarnings).length > 0 && ` · 🔴 OVERLOAD`}
             </Text>
             {parsed.map(item => (
               <ObligationPreview
                 key={item._id}
                 item={item}
                 conflictEvents={conflicts[item._id] ?? []}
+                overload={overloadWarnings[item._id] ?? null}
               />
             ))}
 
@@ -627,6 +677,15 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
               <View style={s.conflictSummary}>
                 <Text style={s.conflictSummaryText}>
                   ⚠️ {Object.keys(conflicts).length} {Object.keys(conflicts).length === 1 ? 'task has' : 'tasks have'} a calendar conflict — review before saving
+                </Text>
+              </View>
+            )}
+
+            {/* Overload summary banner */}
+            {Object.keys(overloadWarnings).length > 0 && (
+              <View style={s.overloadSummary}>
+                <Text style={s.overloadSummaryText}>
+                  🔴 Day overload detected — {Object.values(overloadWarnings)[0]?.count} meetings already scheduled. Adding more may impact your capacity.
                 </Text>
               </View>
             )}
@@ -758,6 +817,8 @@ const s = StyleSheet.create({
 
   conflictSummary:     { backgroundColor: `${C.crimson}18`, borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: `${C.crimson}50` },
   conflictSummaryText: { color: C.crimson, fontSize: 12, fontWeight: '600', textAlign: 'center', lineHeight: 18 },
+  overloadSummary:     { backgroundColor: `${C.salmon}18`, borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: `${C.salmon}50` },
+  overloadSummaryText: { color: C.salmon, fontSize: 12, fontWeight: '600', textAlign: 'center', lineHeight: 18 },
   saveBtn:      { backgroundColor: C.chartreuse, borderRadius: 999, paddingVertical: 15, alignItems: 'center', marginTop: 4, marginBottom: 10 },
   saveBtnText:  { color: C.bg, fontSize: 15, fontWeight: '700' },
   discardBtn:   { alignItems: 'center', paddingVertical: 10 },
