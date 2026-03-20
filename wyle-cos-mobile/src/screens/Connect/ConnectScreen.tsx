@@ -399,33 +399,31 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
             <View style={s.accountList}>
 
               {/* Google / Gmail connect */}
-              {Platform.OS !== 'web' && (
-                <TouchableOpacity
-                  style={[s.accountRow, s.accountRowBorder]}
-                  onPress={googleConnected ? handleDisconnect : handleConnect}
-                  activeOpacity={0.75}
-                >
-                  <View style={[s.accountIconWrap, { backgroundColor: `${C.verdigris}18` }]}>
-                    {connecting
-                      ? <ActivityIndicator size="small" color={C.verdigris} />
-                      : <Text style={s.accountIconText}>📧</Text>
-                    }
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.accountRowLabel}>
-                      {googleConnected ? 'Gmail Connected' : 'Connect Gmail & Calendar'}
-                    </Text>
-                    {googleConnected
-                      ? <Text style={s.accountRowSub}>{googleEmail}</Text>
-                      : <Text style={s.accountRowSub}>Auto-detect obligations from inbox</Text>
-                    }
-                  </View>
-                  <View style={[
-                    s.connStatusDot,
-                    { backgroundColor: googleConnected ? C.verdigris : C.textTer },
-                  ]} />
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                style={[s.accountRow, s.accountRowBorder]}
+                onPress={googleConnected ? handleDisconnect : handleConnect}
+                activeOpacity={0.75}
+              >
+                <View style={[s.accountIconWrap, { backgroundColor: `${C.verdigris}18` }]}>
+                  {connecting
+                    ? <ActivityIndicator size="small" color={C.verdigris} />
+                    : <Text style={s.accountIconText}>📧</Text>
+                  }
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.accountRowLabel}>
+                    {googleConnected ? 'Gmail Connected' : 'Connect Gmail & Calendar'}
+                  </Text>
+                  {googleConnected
+                    ? <Text style={s.accountRowSub}>{googleEmail}</Text>
+                    : <Text style={s.accountRowSub}>Auto-detect obligations from inbox</Text>
+                  }
+                </View>
+                <View style={[
+                  s.connStatusDot,
+                  { backgroundColor: googleConnected ? C.verdigris : C.textTer },
+                ]} />
+              </TouchableOpacity>
 
               {/* Manage Subscription */}
               <TouchableOpacity
