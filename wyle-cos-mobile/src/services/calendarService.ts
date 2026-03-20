@@ -269,6 +269,35 @@ export async function detectDayOverload(date: Date): Promise<DayOverloadResult> 
   }
 }
 
+// ── Cancel a calendar event (notifies attendees automatically) ────────────────
+/**
+ * Cancels a Google Calendar event by ID.
+ * Google automatically sends cancellation emails to all attendees.
+ * Requires the calendar.events scope.
+ */
+export async function cancelCalendarEvent(eventId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const token = await getAccessToken();
+    if (!token) return { ok: false, error: 'Not connected to Google Calendar.' };
+
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
+      {
+        method:  'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+
+    // 204 No Content = success; 410 Gone = already deleted
+    if (res.status === 204 || res.status === 410) return { ok: true };
+
+    const err = await res.json().catch(() => ({}));
+    return { ok: false, error: err?.error?.message ?? `API error ${res.status}` };
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'Unknown error' };
+  }
+}
+
 // ── Conflict check for a proposed time slot ───────────────────────────────────
 /**
  * Given a proposed start + end time, fetches Google Calendar events

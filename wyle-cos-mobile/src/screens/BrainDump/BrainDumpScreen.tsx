@@ -11,7 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Speech from 'expo-speech';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
-import { checkTimeConflicts, fetchEventsForDateRange, detectDayOverload, CalendarEvent, fmtTime, fmtDate, OVERLOAD_THRESHOLD } from '../../services/calendarService';
+import { checkTimeConflicts, fetchEventsForDateRange, detectDayOverload, cancelCalendarEvent, CalendarEvent, fmtTime, fmtDate, OVERLOAD_THRESHOLD } from '../../services/calendarService';
 import type { NavProp } from '../../../app/index';
 
 const C = {
@@ -214,10 +214,12 @@ function ObligationPreview({
   item,
   conflictEvents = [],
   overload = null,
+  onCancelConflict,
 }: {
   item: ParsedObligation;
   conflictEvents?: CalendarEvent[];
   overload?: OverloadInfo | null;
+  onCancelConflict?: (eventId: string, title: string) => void;
 }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(16)).current;
@@ -263,9 +265,20 @@ function ObligationPreview({
           <View style={{ flex: 1 }}>
             <Text style={op.conflictTitle}>Calendar Conflict Detected</Text>
             {conflictEvents.map(ev => (
-              <Text key={ev.id} style={op.conflictDetail}>
-                "{ev.title}" is already scheduled at {fmtTime(ev.startTime)}–{fmtTime(ev.endTime)} on {fmtDate(ev.startTime)}
-              </Text>
+              <View key={ev.id} style={{ marginBottom: 6 }}>
+                <Text style={op.conflictDetail}>
+                  "{ev.title}" is already scheduled at {fmtTime(ev.startTime)}–{fmtTime(ev.endTime)} on {fmtDate(ev.startTime)}
+                </Text>
+                {onCancelConflict && (
+                  <TouchableOpacity
+                    style={op.cancelBtn}
+                    onPress={() => onCancelConflict(ev.id, ev.title)}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={op.cancelBtnText}>Cancel "{ev.title}" & notify attendees</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             ))}
           </View>
         </View>
@@ -304,6 +317,8 @@ const op = StyleSheet.create({
   conflictIcon:   { fontSize: 14, marginTop: 1 },
   conflictTitle:  { color: C.crimson, fontSize: 11, fontWeight: '700', marginBottom: 3 },
   conflictDetail: { color: `${C.crimson}CC`, fontSize: 11, lineHeight: 16 },
+  cancelBtn:      { marginTop: 5, alignSelf: 'flex-start', backgroundColor: `${C.crimson}25`, borderWidth: 1, borderColor: `${C.crimson}60`, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
+  cancelBtnText:  { color: C.crimson, fontSize: 11, fontWeight: '700' },
   // Overload banner — attached below conflict banner (or below card if no conflict)
   overloadBanner: { backgroundColor: `${C.salmon}18`, borderWidth: 1, borderTopWidth: 0, borderColor: C.salmon, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, padding: 10, flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
   overloadIcon:   { fontSize: 14, marginTop: 1 },
@@ -375,6 +390,38 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim  = useRef(new Animated.Value(0)).current;
+
+  // ── Cancel a conflicting calendar event ────────────────────────────────────
+  const handleCancelConflict = async (eventId: string, title: string) => {
+    Alert.alert(
+      'Cancel Meeting?',
+      `Cancel "${title}" and notify all attendees?`,
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Cancel & Notify',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await cancelCalendarEvent(eventId);
+            if (result.ok) {
+              Alert.alert('Done', `"${title}" has been cancelled. Attendees will be notified by Google.`);
+              // Remove from conflicts map so the banner disappears
+              setConflicts(prev => {
+                const next = { ...prev };
+                for (const key of Object.keys(next)) {
+                  next[key] = next[key].filter(ev => ev.id !== eventId);
+                  if (next[key].length === 0) delete next[key];
+                }
+                return next;
+              });
+            } else {
+              Alert.alert('Error', result.error ?? 'Could not cancel the event. Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  };
 
   const RECORDING_TIPS = [
     'Mention bills, renewals, appointments, fees...',
@@ -669,6 +716,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
                 item={item}
                 conflictEvents={conflicts[item._id] ?? []}
                 overload={overloadWarnings[item._id] ?? null}
+                onCancelConflict={handleCancelConflict}
               />
             ))}
 
