@@ -258,40 +258,68 @@ function ObligationPreview({
         </View>
       </View>
 
-      {/* ⚠️ Conflict warning banner */}
-      {hasConflict && (
-        <View style={op.conflictBanner}>
-          <Text style={op.conflictIcon}>⚠️</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={op.conflictTitle}>Calendar Conflict Detected</Text>
+      {/* ⚡ Buddy resolution card — shown when conflict or overload detected */}
+      {(hasConflict || hasOverload) && (
+        <View style={op.resolutionCard}>
+          {/* Header */}
+          <View style={op.resolutionHeader}>
+            <Text style={op.resolutionIcon}>⚡</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={op.resolutionTitle}>Buddy needs your input</Text>
+              <Text style={op.resolutionSub}>
+                {hasConflict && hasOverload
+                  ? `Conflict detected + ${overload!.count} meetings already on that day`
+                  : hasConflict
+                  ? 'There\'s a scheduling conflict on that day'
+                  : `That day already has ${overload!.count} meetings (overloaded)`}
+              </Text>
+            </View>
+          </View>
+
+          {/* Situation summary */}
+          <View style={op.situationBox}>
+            <View style={op.situationRow}>
+              <View style={[op.situationDot, { backgroundColor: riskColor }]} />
+              <Text style={op.situationText}>
+                <Text style={{ color: C.white, fontWeight: '700' }}>{item.title}</Text>
+                {'  '}
+                <Text style={[op.situationBadge, { color: riskColor }]}>{item.risk.toUpperCase()}</Text>
+              </Text>
+            </View>
             {conflictEvents.map(ev => (
-              <View key={ev.id} style={{ marginBottom: 6 }}>
-                <Text style={op.conflictDetail}>
-                  "{ev.title}" is already scheduled at {fmtTime(ev.startTime)}–{fmtTime(ev.endTime)} on {fmtDate(ev.startTime)}
+              <View key={ev.id} style={op.situationRow}>
+                <View style={[op.situationDot, { backgroundColor: C.textTer }]} />
+                <Text style={op.situationText}>
+                  <Text style={{ color: C.textSec }}>{ev.title}</Text>
+                  {'  '}
+                  <Text style={{ color: C.textTer }}>{fmtTime(ev.startTime)}–{fmtTime(ev.endTime)}</Text>
                 </Text>
-                {onCancelConflict && (
-                  <TouchableOpacity
-                    style={op.cancelBtn}
-                    onPress={() => onCancelConflict(ev.id, ev.title)}
-                    activeOpacity={0.75}
-                  >
-                    <Text style={op.cancelBtnText}>Cancel "{ev.title}" & notify attendees</Text>
-                  </TouchableOpacity>
-                )}
               </View>
             ))}
           </View>
-        </View>
-      )}
 
-      {/* 🔴 Day overload warning banner */}
-      {hasOverload && overload && (
-        <View style={op.overloadBanner}>
-          <Text style={op.overloadIcon}>🔴</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={op.overloadTitle}>Day Overload Detected</Text>
-            <Text style={op.overloadDetail}>
-              {item.scheduledTime ? fmtDate(new Date(item.scheduledTime)) : 'That day'} already has {overload.count} meetings (threshold: {OVERLOAD_THRESHOLD}+). This may exceed your daily capacity.
+          {/* Question */}
+          <Text style={op.resolutionQuestion}>What should Buddy do?</Text>
+
+          {/* Action buttons — one per conflicting event */}
+          {hasConflict && onCancelConflict && conflictEvents.map(ev => (
+            <TouchableOpacity
+              key={ev.id}
+              style={op.cancelReplaceBtn}
+              onPress={() => onCancelConflict(ev.id, ev.title)}
+              activeOpacity={0.8}
+            >
+              <Text style={op.cancelReplaceBtnText}>
+                Cancel "{ev.title}" → Add {item.title}
+              </Text>
+              <Text style={op.cancelReplaceBtnSub}>Removes conflict · notifies attendees</Text>
+            </TouchableOpacity>
+          ))}
+
+          {/* Keep both — subtle option */}
+          <View style={op.keepBothRow}>
+            <Text style={op.keepBothText}>
+              Or use the button below to keep all meetings and add task anyway
             </Text>
           </View>
         </View>
@@ -312,18 +340,23 @@ const op = StyleSheet.create({
   notes:          { color: C.textTer, fontSize: 11, marginTop: 3 },
   newBadge:       { backgroundColor: `${C.chartreuse}20`, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: `${C.chartreuse}40` },
   newText:        { color: C.chartreuse, fontSize: 9, fontWeight: '800' },
-  // Conflict banner — attached below the card
-  conflictBanner: { backgroundColor: `${C.crimson}18`, borderWidth: 1, borderTopWidth: 0, borderColor: C.crimson, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, padding: 10, flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
-  conflictIcon:   { fontSize: 14, marginTop: 1 },
-  conflictTitle:  { color: C.crimson, fontSize: 11, fontWeight: '700', marginBottom: 3 },
-  conflictDetail: { color: `${C.crimson}CC`, fontSize: 11, lineHeight: 16 },
-  cancelBtn:      { marginTop: 5, alignSelf: 'flex-start', backgroundColor: `${C.crimson}25`, borderWidth: 1, borderColor: `${C.crimson}60`, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
-  cancelBtnText:  { color: C.crimson, fontSize: 11, fontWeight: '700' },
-  // Overload banner — attached below conflict banner (or below card if no conflict)
-  overloadBanner: { backgroundColor: `${C.salmon}18`, borderWidth: 1, borderTopWidth: 0, borderColor: C.salmon, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, padding: 10, flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
-  overloadIcon:   { fontSize: 14, marginTop: 1 },
-  overloadTitle:  { color: C.salmon, fontSize: 11, fontWeight: '700', marginBottom: 3 },
-  overloadDetail: { color: `${C.salmon}CC`, fontSize: 11, lineHeight: 16 },
+  // ── Buddy resolution card ──────────────────────────────────────────────────
+  resolutionCard:     { borderWidth: 1, borderTopWidth: 0, borderColor: C.orange, borderBottomLeftRadius: 14, borderBottomRightRadius: 14, padding: 14, backgroundColor: `${C.orange}0D` },
+  resolutionHeader:   { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 12 },
+  resolutionIcon:     { fontSize: 18, marginTop: 1 },
+  resolutionTitle:    { color: C.orange, fontSize: 13, fontWeight: '800', marginBottom: 2 },
+  resolutionSub:      { color: `${C.orange}BB`, fontSize: 11, lineHeight: 15 },
+  situationBox:       { backgroundColor: `${C.white}07`, borderRadius: 10, padding: 10, marginBottom: 12, gap: 6 },
+  situationRow:       { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  situationDot:       { width: 7, height: 7, borderRadius: 4 },
+  situationText:      { color: C.textSec, fontSize: 12, flex: 1 },
+  situationBadge:     { fontSize: 10, fontWeight: '800' },
+  resolutionQuestion: { color: C.white, fontSize: 12, fontWeight: '700', marginBottom: 10 },
+  cancelReplaceBtn:   { backgroundColor: C.crimson, borderRadius: 10, padding: 12, marginBottom: 8, alignItems: 'center' },
+  cancelReplaceBtnText: { color: C.white, fontSize: 13, fontWeight: '800', marginBottom: 2 },
+  cancelReplaceBtnSub:  { color: 'rgba(255,255,255,0.7)', fontSize: 10 },
+  keepBothRow:        { borderTopWidth: 1, borderColor: `${C.white}12`, paddingTop: 10, marginTop: 2 },
+  keepBothText:       { color: C.textTer, fontSize: 11, textAlign: 'center', lineHeight: 16 },
 });
 
 // ── Calendar event card (for query results) ───────────────────────────────────
