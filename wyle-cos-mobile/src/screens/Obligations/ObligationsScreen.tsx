@@ -481,7 +481,7 @@ function BuddyResolutionCard({
   conflictEvents: CalendarEvent[];
   overload?: { count: number; events: CalendarEvent[] };
   onResolved: (eventId: string) => void;
-  onOpenCancelNote: (ev: CalendarEvent, itemTitle: string) => void;
+  onOpenCancelNote: (ev: CalendarEvent, itemTitle: string, newItem: UIObligation) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
 
@@ -511,7 +511,7 @@ function BuddyResolutionCard({
         <TouchableOpacity
           key={ev.id}
           style={rc.actionBtn}
-          onPress={() => onOpenCancelNote(ev, item.title)}
+          onPress={() => onOpenCancelNote(ev, item.title, item)}
         >
           <Text style={rc.actionBtnText}>
             Cancel "{ev.title}" ({fmtTime(ev.startTime)}–{fmtTime(ev.endTime)}) → Add {item.title}
@@ -561,7 +561,7 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
   onSave: (items: UIObligation[]) => void;
   existingObligations: UIObligation[];
   onResolve: (id: string) => void;
-  onOpenCancelNote: (ev: CalendarEvent, itemTitle: string) => void;
+  onOpenCancelNote: (ev: CalendarEvent, itemTitle: string, newItem: UIObligation) => void;
 }) {
   const [voiceState, setVoiceState]         = useState<VoiceState>('idle');
   const [voiceMode, setVoiceMode]           = useState<'task_creation' | 'calendar_query'>('task_creation');
@@ -1068,10 +1068,10 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
   // Cancellation note modal state (hoisted from BuddyResolutionCard to avoid nested Modals on web)
   const [cancelNoteModal, setCancelNoteModal] = useState(false);
   const [cancelNoteText, setCancelNoteText]   = useState('');
-  const [pendingCancelEvent, setPendingCancelEvent] = useState<{id: string; title: string; time: string; attendeeEmails: string[]} | null>(null);
+  const [pendingCancelEvent, setPendingCancelEvent] = useState<{id: string; title: string; time: string; attendeeEmails: string[]; newItem: UIObligation | null} | null>(null);
   const [cancelSending, setCancelSending]     = useState(false);
 
-  const openCancelNoteModal = (ev: CalendarEvent, itemTitle: string) => {
+  const openCancelNoteModal = (ev: CalendarEvent, itemTitle: string, newItem?: UIObligation) => {
     const timeStr = fmtTime(ev.startTime) + ' – ' + fmtTime(ev.endTime);
     const autoMessage =
       'Hi,\n\nI need to cancel our "' + ev.title + '" scheduled for ' + timeStr +
@@ -1082,6 +1082,7 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
       title: ev.title,
       time: timeStr,
       attendeeEmails: ev.attendees || [],
+      newItem: newItem ?? null,
     });
     setCancelNoteText(autoMessage);
     setCancelNoteModal(true);
@@ -1111,13 +1112,18 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
         );
       }
 
-      // Capture title before clearing state (used in Alert below)
+      // Capture title/item before clearing state
       const cancelledTitle = pendingCancelEvent.title;
-      const cancelledId = pendingCancelEvent.id;
+      const newItemToSave  = pendingCancelEvent.newItem;
 
       // Close the cancellation note modal and clear pending state
       setCancelNoteModal(false);
       setPendingCancelEvent(null);
+
+      // Save the new task that was being added (e.g. "Hospital appointment")
+      if (newItemToSave) {
+        addObligation(newItemToSave);
+      }
 
       // Close the Brain Dump modal so the conflict card disappears
       setDump(false);
