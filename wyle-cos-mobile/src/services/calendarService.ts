@@ -319,8 +319,7 @@ export async function sendGmailEmail(
     '',
     body,
   ];
-  const message = messageParts.join('
-');
+  const message = messageParts.join('\r\n');
   const encodedMessage = btoa(unescape(encodeURIComponent(message)))
     .replace(/[+]/g, '-')
     .replace(/[/]/g, '_')
