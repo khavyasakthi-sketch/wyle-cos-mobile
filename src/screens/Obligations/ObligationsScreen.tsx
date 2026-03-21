@@ -1089,6 +1089,7 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
 
   const handleConfirmCancel = async () => {
     if (!pendingCancelEvent) return;
+    console.log('[CancelNote] Starting cancellation for:', pendingCancelEvent?.title, 'attendees:', pendingCancelEvent?.attendeeEmails);
     setCancelSending(true);
     try {
       const token = await getAccessToken();
@@ -1101,6 +1102,7 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
       // Send email to each attendee
       const emails = pendingCancelEvent.attendeeEmails.filter((e: string) => e && e.includes('@'));
       for (const email of emails) {
+        console.log('[CancelNote] Sending email to:', email);
         await sendGmailEmail(
           email,
           'Cancelled: ' + pendingCancelEvent.title,
@@ -1109,14 +1111,22 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
         );
       }
 
-      // Close modal
+      // Capture title before clearing state (used in Alert below)
+      const cancelledTitle = pendingCancelEvent.title;
+      const cancelledId = pendingCancelEvent.id;
+
+      // Close the cancellation note modal and clear pending state
       setCancelNoteModal(false);
       setPendingCancelEvent(null);
 
-      const emailMsg = emails.length > 0
-        ? 'email sent to ' + emails.length + ' attendee(s)'
-        : 'no attendees to notify';
-      Alert.alert('Done', '"' + pendingCancelEvent.title + '" cancelled and ' + emailMsg + '.');
+      // Close the Brain Dump modal so the conflict card disappears
+      setDump(false);
+
+      if (emails.length > 0) {
+        Alert.alert('✅ Done', '"' + cancelledTitle + '" has been cancelled and a notification email was sent to ' + emails.length + ' attendee(s).');
+      } else {
+        Alert.alert('✅ Done', '"' + cancelledTitle + '" has been cancelled. No attendees to notify.');
+      }
     } catch (e: any) {
       Alert.alert('Error', e.message);
     } finally {
