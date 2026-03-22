@@ -4,7 +4,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
   Animated, Modal, TextInput, KeyboardAvoidingView,
   Platform, StatusBar, ActivityIndicator, Dimensions,
 } from 'react-native';
@@ -15,7 +15,8 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import { VoiceService } from '../../services/voiceService';
 import { UIObligation } from '../../types';
-import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate, detectDayOverload, OVERLOAD_THRESHOLD, cancelCalendarEvent } from '../../services/calendarService';
+import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate, detectDayOverload, OVERLOAD_THRESHOLD, cancelCalendarEvent, sendGmailEmail } from '../../services/calendarService';
+import { getAccessToken } from '../../services/googleAuthService';
 
 const { width } = Dimensions.get('window');
 
@@ -467,40 +468,29 @@ function findObligationInText(text: string, obligations: UIObligation[]): UIObli
   }) ?? null;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
 // ── Buddy Resolution Card (conflict + overload combined) ─────────────────────
 function BuddyResolutionCard({
   item,
   conflictEvents,
   overload,
   onResolved,
+  onOpenCancelNote,
 }: {
   item: UIObligation;
   conflictEvents: CalendarEvent[];
   overload?: { count: number; events: CalendarEvent[] };
   onResolved: (eventId: string) => void;
+  onOpenCancelNote: (ev: CalendarEvent, itemTitle: string, newItem: UIObligation) => void;
 }) {
-  const [cancelling, setCancelling] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const handleCancel = async (ev: CalendarEvent) => {
-    setCancelling(ev.id);
-    setError(null);
-    const result = await cancelCalendarEvent(ev.id);
-    setCancelling(null);
-    if (result.ok) {
-      onResolved(ev.id);
-    } else {
-      setError(result.error ?? 'Could not cancel meeting.');
-    }
-  };
 
   const situationParts: string[] = [];
   if (conflictEvents.length > 0) {
-    situationParts.push(`"${conflictEvents.map(e => e.title).join('", "')}" overlaps with "${item.title}"`);
+    situationParts.push('"' + conflictEvents.map((e: CalendarEvent) => e.title).join('", "') + '" overlaps with "' + item.title + '"');
   }
   if (overload) {
-    situationParts.push(`this day already has ${overload.count} meetings (overload threshold: ${OVERLOAD_THRESHOLD})`);
+    situationParts.push('this day already has ' + overload.count + ' meetings (overload threshold: ' + OVERLOAD_THRESHOLD + ')');
   }
 
   return (
@@ -517,19 +507,15 @@ function BuddyResolutionCard({
 
       <Text style={rc.question}>What should Buddy do?</Text>
 
-      {conflictEvents.map(ev => (
+      {conflictEvents.map((ev: CalendarEvent) => (
         <TouchableOpacity
           key={ev.id}
-          style={[rc.actionBtn, cancelling === ev.id && { opacity: 0.6 }]}
-          onPress={() => handleCancel(ev)}
-          disabled={cancelling !== null}
+          style={rc.actionBtn}
+          onPress={() => onOpenCancelNote(ev, item.title, item)}
         >
-          {cancelling === ev.id
-            ? <ActivityIndicator color={C.white} size="small" />
-            : <Text style={rc.actionBtnText}>
-                Cancel "{ev.title}" ({fmtTime(ev.startTime)}–{fmtTime(ev.endTime)}) → Add {item.title}
-              </Text>
-          }
+          <Text style={rc.actionBtnText}>
+            Cancel "{ev.title}" ({fmtTime(ev.startTime)}–{fmtTime(ev.endTime)}) → Add {item.title}
+          </Text>
         </TouchableOpacity>
       ))}
 
@@ -540,10 +526,10 @@ function BuddyResolutionCard({
           🔴 This day has {overload.count} meetings. Consider rescheduling "{item.title}" to a lighter day.
         </Text>
       )}
+
     </View>
   );
 }
-
 const rc = StyleSheet.create({
   card:        { backgroundColor: 'rgba(255,149,0,0.08)', borderRadius: 12, padding: 12, marginTop: 6, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,149,0,0.35)' },
   header:      { flexDirection: 'row', gap: 8, alignItems: 'flex-start', marginBottom: 8 },
@@ -569,12 +555,13 @@ const ow = StyleSheet.create({
 
 // Brain Dump Modal (all logic unchanged, dark theme applied)
 // ─────────────────────────────────────────────────────────────────────────────
-function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResolve }: {
+function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResolve, onOpenCancelNote }: {
   visible: boolean;
   onClose: () => void;
   onSave: (items: UIObligation[]) => void;
   existingObligations: UIObligation[];
   onResolve: (id: string) => void;
+  onOpenCancelNote: (ev: CalendarEvent, itemTitle: string, newItem: UIObligation) => void;
 }) {
   const [voiceState, setVoiceState]         = useState<VoiceState>('idle');
   const [voiceMode, setVoiceMode]           = useState<'task_creation' | 'calendar_query'>('task_creation');
@@ -879,6 +866,7 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
                             return next;
                           });
                         }}
+                        onOpenCancelNote={onOpenCancelNote}
                       />
                     )}
                   </View>
@@ -1077,6 +1065,81 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideUp  = useRef(new Animated.Value(16)).current;
 
+  // Cancellation note modal state (hoisted from BuddyResolutionCard to avoid nested Modals on web)
+  const [cancelNoteModal, setCancelNoteModal] = useState(false);
+  const [cancelNoteText, setCancelNoteText]   = useState('');
+  const [pendingCancelEvent, setPendingCancelEvent] = useState<{id: string; title: string; time: string; attendeeEmails: string[]; newItem: UIObligation | null} | null>(null);
+  const [cancelSending, setCancelSending]     = useState(false);
+
+  const openCancelNoteModal = (ev: CalendarEvent, itemTitle: string, newItem?: UIObligation) => {
+    const timeStr = fmtTime(ev.startTime) + ' – ' + fmtTime(ev.endTime);
+    const autoMessage =
+      'Hi,\n\nI need to cancel our "' + ev.title + '" scheduled for ' + timeStr +
+      '. I have a priority appointment ("' + itemTitle + '") that requires my immediate attention.' +
+      '\n\nApologies for the short notice. I\'ll reach out to reschedule.\n\nBest regards';
+    setPendingCancelEvent({
+      id: ev.id,
+      title: ev.title,
+      time: timeStr,
+      attendeeEmails: ev.attendees || [],
+      newItem: newItem ?? null,
+    });
+    setCancelNoteText(autoMessage);
+    setCancelNoteModal(true);
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!pendingCancelEvent) return;
+    console.log('[CancelNote] Starting cancellation for:', pendingCancelEvent?.title, 'attendees:', pendingCancelEvent?.attendeeEmails);
+    setCancelSending(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error('No access token');
+
+      // Cancel the calendar event
+      const result = await cancelCalendarEvent(pendingCancelEvent.id, token);
+      if (!result.ok) throw new Error(result.error ?? 'Could not cancel meeting.');
+
+      // Send email to each attendee
+      const emails = pendingCancelEvent.attendeeEmails.filter((e: string) => e && e.includes('@'));
+      for (const email of emails) {
+        console.log('[CancelNote] Sending email to:', email);
+        await sendGmailEmail(
+          email,
+          'Cancelled: ' + pendingCancelEvent.title,
+          cancelNoteText,
+          token,
+        );
+      }
+
+      // Capture title/item before clearing state
+      const cancelledTitle = pendingCancelEvent.title;
+      const newItemToSave  = pendingCancelEvent.newItem;
+
+      // Close the cancellation note modal and clear pending state
+      setCancelNoteModal(false);
+      setPendingCancelEvent(null);
+
+      // Save the new task that was being added (e.g. "Hospital appointment")
+      if (newItemToSave) {
+        addObligation(newItemToSave);
+      }
+
+      // Close the Brain Dump modal so the conflict card disappears
+      setDump(false);
+
+      if (emails.length > 0) {
+        Alert.alert('✅ Done', '"' + cancelledTitle + '" has been cancelled and a notification email was sent to ' + emails.length + ' attendee(s).');
+      } else {
+        Alert.alert('✅ Done', '"' + cancelledTitle + '" has been cancelled. No attendees to notify.');
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
+    } finally {
+      setCancelSending(false);
+    }
+  };
+
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
@@ -1200,7 +1263,78 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
         onSave={(items) => addObligations(items)}
         existingObligations={active}
         onResolve={(id) => resolveObligation(id)}
+        onOpenCancelNote={openCancelNoteModal}
       />
+
+      {/* Cancellation Note Modal — top-level, not nested inside BrainDumpModal */}
+      <Modal
+        visible={cancelNoteModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCancelNoteModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.7)' }}
+        >
+          <View style={{
+            backgroundColor: '#1A1A1A',
+            borderTopLeftRadius: 20,
+            borderTopRightRadius: 20,
+            padding: 24,
+            maxHeight: '80%',
+          }}>
+            <Text style={{ color: '#FFFFFF', fontSize: 18, fontWeight: '700', marginBottom: 4 }}>
+              ✉️ Cancellation Note
+            </Text>
+            <Text style={{ color: '#9A9A9A', fontSize: 13, marginBottom: 16 }}>
+              Review and edit the message before sending to attendees.
+            </Text>
+            <TextInput
+              value={cancelNoteText}
+              onChangeText={setCancelNoteText}
+              multiline
+              style={{
+                backgroundColor: '#252525',
+                color: '#FFFFFF',
+                borderRadius: 12,
+                padding: 14,
+                fontSize: 14,
+                minHeight: 160,
+                textAlignVertical: 'top',
+                marginBottom: 16,
+                borderWidth: 1,
+                borderColor: '#333',
+              }}
+            />
+            <TouchableOpacity
+              onPress={handleConfirmCancel}
+              disabled={cancelSending}
+              style={{
+                backgroundColor: cancelSending ? '#555' : '#FF3B30',
+                borderRadius: 12,
+                padding: 16,
+                alignItems: 'center',
+                marginBottom: 10,
+              }}
+            >
+              {cancelSending ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 15 }}>
+                  Send & Cancel Meeting
+                </Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setCancelNoteModal(false)}
+              style={{ alignItems: 'center', padding: 12 }}
+            >
+              <Text style={{ color: '#9A9A9A', fontSize: 14 }}>Go back</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
