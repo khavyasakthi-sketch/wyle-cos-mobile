@@ -6,12 +6,14 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   FlatList, KeyboardAvoidingView, Platform, Animated,
-  StatusBar, ActivityIndicator, Dimensions, Alert,
+  StatusBar, ActivityIndicator, Dimensions, Alert, Image, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
@@ -92,7 +94,21 @@ const RESOLVE_TOOL = [{
 }];
 
 type Role = 'user' | 'buddy';
-type Message = { id: string; role: Role; text: string; timestamp: Date };
+type AttachmentType = 'image' | 'pdf' | 'doc' | 'file';
+type Attachment = {
+  uri: string;           // local file URI
+  type: AttachmentType;
+  name: string;          // file name shown in bubble
+  mimeType?: string;
+  base64?: string;       // populated for images — sent to Claude in Phase 2
+};
+type Message = {
+  id: string;
+  role: Role;
+  text: string;
+  timestamp: Date;
+  attachment?: Attachment;
+};
 type VoiceState = 'idle' | 'recording' | 'transcribing';
 
 const QUICK_PROMPTS = [
@@ -234,6 +250,30 @@ const ti = StyleSheet.create({
 // ─────────────────────────────────────────────────────────────────────────────
 // Message bubble
 // ─────────────────────────────────────────────────────────────────────────────
+// ── Attachment preview inside a bubble ───────────────────────────────────────
+function AttachmentPreview({ attachment }: { attachment: Attachment }) {
+  const isImage = attachment.type === 'image';
+  if (isImage) {
+    return (
+      <Image
+        source={{ uri: attachment.uri }}
+        style={bub.attachImage}
+        resizeMode="cover"
+      />
+    );
+  }
+  // Non-image: show a file pill
+  const icons: Record<AttachmentType, string> = {
+    image: '🖼️', pdf: '📄', doc: '📝', file: '📎',
+  };
+  return (
+    <View style={bub.filePill}>
+      <Text style={bub.filePillIcon}>{icons[attachment.type] ?? '📎'}</Text>
+      <Text style={bub.filePillName} numberOfLines={1}>{attachment.name}</Text>
+    </View>
+  );
+}
+
 function MessageBubble({ message }: { message: Message }) {
   const isUser  = message.role === 'user';
   const fadeIn  = useRef(new Animated.Value(0)).current;
@@ -250,7 +290,8 @@ function MessageBubble({ message }: { message: Message }) {
     return (
       <Animated.View style={[bub.userRow, { opacity: fadeIn, transform: [{ translateY: slideUp }] }]}>
         <View style={bub.userBubble}>
-          <Text style={bub.userText}>{message.text}</Text>
+          {message.attachment && <AttachmentPreview attachment={message.attachment} />}
+          {message.text ? <Text style={bub.userText}>{message.text}</Text> : null}
         </View>
         <Text style={bub.time}>{time}</Text>
       </Animated.View>
@@ -294,6 +335,19 @@ const bub = StyleSheet.create({
   },
   buddyText:  { color: C.white, fontSize: 15, lineHeight: 22 },
   time:       { color: C.textTer, fontSize: 10, marginTop: 4 },
+  // Attachment styles
+  attachImage: {
+    width: '100%', height: 180, borderRadius: 12,
+    marginBottom: 8, backgroundColor: C.surfaceHi,
+  },
+  filePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: `${C.verdigris}18`,
+    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+    marginBottom: 8, borderWidth: 1, borderColor: `${C.verdigris}30`,
+  },
+  filePillIcon: { fontSize: 18 },
+  filePillName: { color: C.white, fontSize: 13, flex: 1 },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -355,11 +409,124 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
   const [isSpeaking, setIsSpeaking]   = useState(false);
   const [pendingResolve, setPendingResolve] = useState<{ id: string; title: string } | null>(null);
 
+  // ── Attachment state ────────────────────────────────────────────────────────
+  const [attachMenuVisible, setAttachMenuVisible] = useState(false);
+  const [pendingAttachment, setPendingAttachment] = useState<Attachment | null>(null);
+
   const recordingRef = useRef<Audio.Recording | null>(null);
   const listRef      = useRef<FlatList>(null);
 
   const scrollToEnd = () =>
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
+
+  // ── Attachment helpers ──────────────────────────────────────────────────────
+  const detectFileType = (mimeType: string, name: string): AttachmentType => {
+    if (mimeType.startsWith('image/')) return 'image';
+    if (mimeType === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+    if (mimeType.includes('word') || name.endsWith('.doc') || name.endsWith('.docx')) return 'doc';
+    return 'file';
+  };
+
+  const handleOpenCamera = async () => {
+    setAttachMenuVisible(false);
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Camera Access', 'Please allow camera access in Settings to scan documents.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      base64: true,
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setPendingAttachment({
+        uri: asset.uri,
+        type: 'image',
+        name: 'Camera scan',
+        mimeType: asset.mimeType ?? 'image/jpeg',
+        base64: asset.base64 ?? undefined,
+      });
+    }
+  };
+
+  const handleOpenPhotos = async () => {
+    setAttachMenuVisible(false);
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Photo Library Access', 'Please allow photo library access in Settings.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      base64: true,
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setPendingAttachment({
+        uri: asset.uri,
+        type: 'image',
+        name: asset.fileName ?? 'Photo',
+        mimeType: asset.mimeType ?? 'image/jpeg',
+        base64: asset.base64 ?? undefined,
+      });
+    }
+  };
+
+  const handleOpenFiles = async () => {
+    setAttachMenuVisible(false);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/*', 'application/msword',
+               'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        const mimeType = asset.mimeType ?? 'application/octet-stream';
+        setPendingAttachment({
+          uri: asset.uri,
+          type: detectFileType(mimeType, asset.name),
+          name: asset.name,
+          mimeType,
+        });
+      }
+    } catch {
+      Alert.alert('Error', 'Could not open file picker.');
+    }
+  };
+
+  // Send a message that may include a pending attachment
+  const sendWithAttachment = () => {
+    if (!pendingAttachment && !input.trim()) return;
+    const userMsg: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      text: input.trim() || (pendingAttachment ? `📎 ${pendingAttachment.name}` : ''),
+      timestamp: new Date(),
+      attachment: pendingAttachment ?? undefined,
+    };
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    setPendingAttachment(null);
+    scrollToEnd();
+    // Phase 2 will wire this into Claude — for now show a placeholder response
+    setLoading(true);
+    setTimeout(() => {
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'buddy',
+        text: `I can see your ${pendingAttachment?.type === 'image' ? 'document scan' : 'file'} — "${userMsg.attachment?.name}". Give me a moment to analyse it and extract the key details. ⏳\n\n(Full AI extraction coming in Phase 2!)`,
+        timestamp: new Date(),
+      }]);
+      setLoading(false);
+      scrollToEnd();
+    }, 1200);
+  };
 
   // ── Confirm / cancel a pending resolve ─────────────────────────────────────
   const handleConfirmResolve = () => {
@@ -621,25 +788,58 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
           </View>
         )}
 
+        {/* Pending attachment preview strip */}
+        {pendingAttachment && (
+          <View style={s.attachPreviewBar}>
+            {pendingAttachment.type === 'image' ? (
+              <Image source={{ uri: pendingAttachment.uri }} style={s.attachThumb} resizeMode="cover" />
+            ) : (
+              <View style={s.attachFileBadge}>
+                <Text style={s.attachFileBadgeText}>
+                  {pendingAttachment.type === 'pdf' ? '📄' : '📝'} {pendingAttachment.name}
+                </Text>
+              </View>
+            )}
+            <TouchableOpacity style={s.attachRemove} onPress={() => setPendingAttachment(null)}>
+              <Text style={s.attachRemoveText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Input bar */}
         <View style={s.inputBar}>
+          {/* + Attach button */}
+          <TouchableOpacity
+            style={s.attachBtn}
+            onPress={() => setAttachMenuVisible(true)}
+            disabled={voiceState !== 'idle'}
+          >
+            <Text style={s.attachBtnText}>＋</Text>
+          </TouchableOpacity>
+
           <TextInput
             style={s.input}
             value={input}
             onChangeText={setInput}
-            placeholder={voiceState === 'recording' ? 'Listening...' : 'Ask Buddy anything...'}
+            placeholder={
+              pendingAttachment
+                ? 'Add a message (optional)...'
+                : voiceState === 'recording'
+                  ? 'Listening...'
+                  : 'Ask Buddy anything...'
+            }
             placeholderTextColor={voiceState === 'recording' ? C.salmon : C.textTer}
             multiline
             maxLength={500}
             returnKeyType="send"
             blurOnSubmit
-            onSubmitEditing={() => sendMessage(input)}
+            onSubmitEditing={() => pendingAttachment ? sendWithAttachment() : sendMessage(input)}
             editable={voiceState === 'idle'}
           />
           <TouchableOpacity
-            style={[s.sendBtn, (!input.trim() || loading || voiceState !== 'idle') && { opacity: 0.35 }]}
-            onPress={() => sendMessage(input)}
-            disabled={!input.trim() || loading || voiceState !== 'idle'}
+            style={[s.sendBtn, ((!input.trim() && !pendingAttachment) || loading || voiceState !== 'idle') && { opacity: 0.35 }]}
+            onPress={() => pendingAttachment ? sendWithAttachment() : sendMessage(input)}
+            disabled={(!input.trim() && !pendingAttachment) || loading || voiceState !== 'idle'}
           >
             {loading
               ? <ActivityIndicator color={C.bg} size="small" />
@@ -647,6 +847,57 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
             }
           </TouchableOpacity>
         </View>
+
+        {/* Attachment menu modal */}
+        <Modal
+          visible={attachMenuVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setAttachMenuVisible(false)}
+        >
+          <TouchableOpacity
+            style={s.attachOverlay}
+            activeOpacity={1}
+            onPress={() => setAttachMenuVisible(false)}
+          >
+            <View style={s.attachSheet}>
+              <View style={s.attachHandle} />
+              <Text style={s.attachSheetTitle}>Add Attachment</Text>
+              <Text style={s.attachSheetSub}>Buddy will scan and extract key details</Text>
+
+              <TouchableOpacity style={s.attachOption} onPress={handleOpenCamera}>
+                <View style={s.attachOptionIcon}><Text style={{ fontSize: 24 }}>📷</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.attachOptionLabel}>Camera</Text>
+                  <Text style={s.attachOptionSub}>Scan a document or ID card live</Text>
+                </View>
+                <Text style={s.attachOptionArrow}>›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={s.attachOption} onPress={handleOpenPhotos}>
+                <View style={s.attachOptionIcon}><Text style={{ fontSize: 24 }}>🖼️</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.attachOptionLabel}>Photos</Text>
+                  <Text style={s.attachOptionSub}>Pick an image from your gallery</Text>
+                </View>
+                <Text style={s.attachOptionArrow}>›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={s.attachOption} onPress={handleOpenFiles}>
+                <View style={s.attachOptionIcon}><Text style={{ fontSize: 24 }}>📁</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.attachOptionLabel}>Files</Text>
+                  <Text style={s.attachOptionSub}>Upload a PDF, Word doc, or image</Text>
+                </View>
+                <Text style={s.attachOptionArrow}>›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={s.attachCancel} onPress={() => setAttachMenuVisible(false)}>
+                <Text style={s.attachCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
       </KeyboardAvoidingView>
 
       {/* ── Tab Bar ─────────────────────────────────────────────────────────── */}
@@ -718,8 +969,8 @@ const s = StyleSheet.create({
 
   // ── Input bar
   inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: 10,
-    paddingHorizontal: 16, paddingVertical: 10,
+    flexDirection: 'row', alignItems: 'flex-end', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 10,
     borderTopWidth: 1, borderColor: C.border, backgroundColor: C.bg,
   },
   input: {
@@ -730,6 +981,79 @@ const s = StyleSheet.create({
   },
   sendBtn:  { width: 44, height: 44, borderRadius: 22, backgroundColor: C.chartreuse, alignItems: 'center', justifyContent: 'center' },
   sendIcon: { color: C.bg, fontSize: 22, fontWeight: '700', lineHeight: 26 },
+
+  // ── Attach button
+  attachBtn: {
+    width: 40, height: 40, borderRadius: 12,
+    backgroundColor: C.surfaceEl,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: C.border,
+  },
+  attachBtnText: { color: C.verdigris, fontSize: 22, lineHeight: 26, fontWeight: '300' },
+
+  // ── Pending attachment preview strip
+  attachPreviewBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderTopWidth: 1, borderColor: C.border, backgroundColor: C.surface,
+  },
+  attachThumb: {
+    width: 54, height: 54, borderRadius: 10,
+    backgroundColor: C.surfaceHi,
+  },
+  attachFileBadge: {
+    flex: 1, backgroundColor: `${C.verdigris}14`,
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8,
+    borderWidth: 1, borderColor: `${C.verdigris}28`,
+  },
+  attachFileBadgeText: { color: C.white, fontSize: 13 },
+  attachRemove: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: C.surfaceHi,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  attachRemoveText: { color: C.textSec, fontSize: 13, fontWeight: '700' },
+
+  // ── Attachment bottom-sheet modal
+  attachOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  attachSheet: {
+    backgroundColor: C.surface,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 20, paddingBottom: 36, paddingTop: 12,
+  },
+  attachHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: C.surfaceHi, alignSelf: 'center', marginBottom: 20,
+  },
+  attachSheetTitle: {
+    color: C.white, fontSize: 17, fontWeight: '700', marginBottom: 4,
+  },
+  attachSheetSub: {
+    color: C.textSec, fontSize: 13, marginBottom: 20,
+  },
+  attachOption: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 16,
+    borderBottomWidth: 1, borderColor: C.border,
+  },
+  attachOptionIcon: {
+    width: 46, height: 46, borderRadius: 14,
+    backgroundColor: C.surfaceEl,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  attachOptionLabel: { color: C.white, fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  attachOptionSub:   { color: C.textSec, fontSize: 12 },
+  attachOptionArrow: { color: C.textTer, fontSize: 20, fontWeight: '300' },
+  attachCancel: {
+    marginTop: 18, alignItems: 'center',
+    paddingVertical: 14,
+    backgroundColor: C.surfaceEl,
+    borderRadius: 14,
+  },
+  attachCancelText: { color: C.textSec, fontSize: 15, fontWeight: '600' },
 
   // ── Tab bar
   tabBar: {
