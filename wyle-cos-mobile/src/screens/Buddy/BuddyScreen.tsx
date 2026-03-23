@@ -789,7 +789,12 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
 
     try {
       const history = [...messages, userMsg]
-        .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant' as const, content: m.text }));
+        .map(m => ({
+          role: m.role === 'user' ? 'user' : 'assistant' as const,
+          // Use a placeholder for file-only messages so Claude API never receives empty content
+          content: m.text.trim() || (m.attachment ? `[User uploaded a ${m.attachment.type}: ${m.attachment.name}]` : '[message]'),
+        }))
+        .filter(m => m.content.trim().length > 0);
 
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
